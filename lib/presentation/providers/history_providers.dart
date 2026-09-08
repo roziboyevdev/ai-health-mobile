@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 
 import '../../data/models/heart_rate_record.dart';
+import '../../data/models/metric_sample.dart';
 import '../../data/models/sleep_session.dart';
 import '../../data/models/spo2_record.dart';
 import '../../data/models/step_record.dart';
+import '../../data/models/device.dart';
 import '../../domain/entities/dashboard_snapshot.dart';
 import 'bluetooth_provider.dart';
 import 'repository_providers.dart';
@@ -33,6 +35,21 @@ final stepHistoryProvider = FutureProvider<List<StepRecord>>((ref) {
 final sleepHistoryProvider = FutureProvider<List<SleepSession>>((ref) {
   ref.watch(bluetoothNotifierProvider.select((state) => state.healthEpoch));
   return ref.read(healthRepositoryProvider).sleepHistory();
+});
+
+final monthStatsProvider = FutureProvider<Map<String, MonthMetricStats>>((ref) {
+  ref.watch(bluetoothNotifierProvider.select((state) => state.healthEpoch));
+  return ref.read(healthRepositoryProvider).monthStats();
+});
+
+final metricHistoryProvider = FutureProvider.family<List<MetricSample>, String>((ref, metricType) {
+  ref.watch(bluetoothNotifierProvider.select((state) => state.healthEpoch));
+  return ref.read(healthRepositoryProvider).metricHistory(metricType);
+});
+
+final devicesHistoryProvider = FutureProvider<List<Device>>((ref) {
+  ref.watch(bluetoothNotifierProvider.select((state) => state.healthEpoch));
+  return ref.read(healthRepositoryProvider).devices();
 });
 
 final syncNotifierProvider = AsyncNotifierProvider<SyncNotifier, void>(SyncNotifier.new);

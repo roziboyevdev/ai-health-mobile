@@ -21,7 +21,7 @@ class MetricTile extends StatelessWidget {
     return Card(
       color: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

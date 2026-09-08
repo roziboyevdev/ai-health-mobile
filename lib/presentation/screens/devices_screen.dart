@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:intl/intl.dart';
 
 import '../providers/bluetooth_provider.dart';
+import '../providers/history_providers.dart';
 import '../widgets/screen_header.dart';
 import '../widgets/state_views.dart';
 
@@ -11,6 +13,7 @@ class DevicesScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final bluetooth = ref.watch(bluetoothNotifierProvider);
+    final savedDevices = ref.watch(devicesHistoryProvider);
     final notifier = ref.read(bluetoothNotifierProvider.notifier);
     final theme = Theme.of(context);
 
@@ -48,29 +51,61 @@ class DevicesScreen extends ConsumerWidget {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
             child: Text(
-              'Keep the band close and in pairing mode. VALDUS VANTA / VITRO should appear as VITRO or VANTA. Disconnect G BAND first if it is already paired.',
+              'Keep the band close and in pairing mode. VALDUS VANTA / VITRO should appear as VITRO or VANTA.',
               style: theme.textTheme.bodySmall,
             ),
           ),
-        if (bluetooth.connectedDevice != null)
-          ListTile(
-            leading: const Icon(Icons.watch_outlined),
-            title: Text(bluetooth.connectedDevice!.name),
-            subtitle: Text(
-              [
-                bluetooth.connectedDevice!.macAddress ?? bluetooth.connectedDevice!.deviceId,
-                if (bluetooth.connectedDevice!.batteryLevel != null)
-                  '${bluetooth.connectedDevice!.batteryLevel}% battery',
-              ].join(' · '),
-            ),
-            trailing: TextButton(
-              onPressed: bluetooth.isBusy ? null : notifier.disconnect,
-              child: const Text('Disconnect'),
-            ),
-          ),
+        AsyncBody(
+          value: savedDevices,
+          builder: (devices) {
+            final connected = devices.where((device) => device.isConnected).toList();
+            final disconnected = devices.where((device) => !device.isConnected).toList();
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const _SectionTitle('Connected devices'),
+                if (connected.isEmpty)
+                  const _EmptySection(message: 'No bracelet is connected.')
+                else
+                  for (final device in connected)
+                    ListTile(
+                      leading: const Icon(Icons.watch_outlined),
+                      title: Text(device.name),
+                      subtitle: Text(
+                        [
+                          device.macAddress ?? device.deviceId,
+                          if (device.batteryLevel != null) '${device.batteryLevel}% battery',
+                        ].join(' - '),
+                      ),
+                      trailing: TextButton(
+                        onPressed: bluetooth.isBusy ? null : notifier.disconnect,
+                        child: const Text('Disconnect'),
+                      ),
+                    ),
+                const _SectionTitle('Disconnected / previously paired devices'),
+                if (disconnected.isEmpty)
+                  const _EmptySection(message: 'Previously paired devices will appear here.')
+                else
+                  for (final device in disconnected)
+                    ListTile(
+                      leading: const Icon(Icons.watch_outlined),
+                      title: Text(device.name),
+                      subtitle: Text(
+                        [
+                          device.macAddress ?? device.deviceId,
+                          if (device.lastSeenAt != null)
+                            'Last seen ${DateFormat.MMMd().add_jm().format(device.lastSeenAt!)}',
+                        ].join(' - '),
+                      ),
+                    ),
+              ],
+            );
+          },
+        ),
+        const _SectionTitle('Available scan results'),
         if (bluetooth.devices.isEmpty && !bluetooth.isScanning)
           const SizedBox(
-            height: 320,
+            height: 260,
             child: EmptyState(
               icon: Icons.bluetooth_searching_outlined,
               title: 'No bands found',
@@ -108,7 +143,7 @@ class DevicesScreen extends ConsumerWidget {
                 [
                   device.macAddress ?? device.id,
                   if (device.rssi != null) '${device.rssi} dBm',
-                ].join(' · '),
+                ].join(' - '),
               ),
               trailing: FilledButton(
                 onPressed: bluetooth.isBusy ? null : () => notifier.connect(device),
@@ -116,6 +151,37 @@ class DevicesScreen extends ConsumerWidget {
               ),
             ),
       ],
+    );
+  }
+}
+
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle(this.title);
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
+      child: Text(
+        title,
+        style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+}
+
+class _EmptySection extends StatelessWidget {
+  const _EmptySection({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+      child: Text(message, style: Theme.of(context).textTheme.bodySmall),
     );
   }
 }

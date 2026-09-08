@@ -32,6 +32,10 @@
 	<string>AI Health connects to nearby smart bands and BLE wearables to read health data.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Bluetooth scanning may require location permission on some devices.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

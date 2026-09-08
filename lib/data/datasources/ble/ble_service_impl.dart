@@ -61,6 +61,7 @@ class MethodChannelBleService implements BleService {
     final statuses = await [
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
+      Permission.notification,
       Permission.locationWhenInUse,
     ].request();
     final scan = statuses[Permission.bluetoothScan] ?? PermissionStatus.denied;

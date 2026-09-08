@@ -7,6 +7,7 @@ import '../../data/datasources/ble/ble_models.dart';
 import '../../data/models/daily_summary.dart';
 import '../../data/models/device.dart';
 import '../../data/models/heart_rate_record.dart';
+import '../../data/models/metric_sample.dart';
 import '../../data/models/sleep_session.dart';
 import '../../data/models/spo2_record.dart';
 import '../../data/models/step_record.dart';
@@ -77,6 +78,7 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
   StreamSubscription<BleConnectionStateType>? _connectionSub;
   StreamSubscription<RealTimeHealthData>? _healthSub;
   Timer? _scanTimeout;
+  Timer? _catchUpSyncTimer;
 
   @override
   BluetoothState build() {
@@ -87,6 +89,7 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
     _healthSub = ble.realTimeHealth.listen(_onHealthData, onError: _onError);
     ref.onDispose(() {
       _scanTimeout?.cancel();
+      _catchUpSyncTimer?.cancel();
       _scanSub?.cancel();
       _connectionSub?.cancel();
       _healthSub?.cancel();
@@ -165,6 +168,7 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
         ..isConnected = true
         ..lastSeenAt = DateTime.now();
       await repository.upsertDevice(model);
+      await repository.recordConnectionSession(deviceId: model.deviceId, startedAt: DateTime.now());
       if (settings.syncOnConnect) {
         final sync = await ref.read(bleRepositoryProvider).syncHealthHistory();
         await _persistSync(sync, model);
@@ -179,6 +183,7 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
         isBusy: false,
         healthEpoch: state.healthEpoch + 1,
       );
+      _startCatchUpSync();
     } catch (error) {
       _onError(error);
     }
@@ -211,6 +216,7 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
         isBusy: false,
         clearConnectedDevice: true,
       );
+      _catchUpSyncTimer?.cancel();
     } catch (error) {
       _onError(error);
     }
@@ -233,10 +239,31 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
     final device = state.connectedDevice;
     if (device == null) return;
     final repository = ref.read(healthRepositoryProvider);
+    device.lastSeenAt = data.recordedAt;
     if (data.batteryLevel != null && device.batteryLevel != data.batteryLevel) {
       device.batteryLevel = data.batteryLevel;
       await repository.upsertDevice(device);
     }
+    await repository.saveMetricSamples([
+      if (data.hrv != null)
+        MetricSample(
+          deviceId: device.deviceId,
+          metricType: 'hrv',
+          timestamp: data.recordedAt,
+          valueNumeric: data.hrv!.toDouble(),
+          unit: 'ms',
+          rawPayload: {'hrv': data.hrv, 'source': 'live'},
+        ),
+      if (data.batteryLevel != null)
+        MetricSample(
+          deviceId: device.deviceId,
+          metricType: 'battery',
+          timestamp: data.recordedAt,
+          valueNumeric: data.batteryLevel!.toDouble(),
+          unit: '%',
+          rawPayload: {'batteryLevel': data.batteryLevel, 'source': 'live'},
+        ),
+    ]);
     if (data.heartRate != null) {
       await repository.saveHeartRate(
         HeartRateRecord()
@@ -263,6 +290,7 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
           ..steps = data.steps!,
       );
     }
+    state = state.copyWith(healthEpoch: state.healthEpoch + 1);
   }
 
   Future<void> _persistSync(HealthSyncResult sync, Device device) async {
@@ -334,7 +362,22 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
     final device = await repository.connectedDevice();
     if (device != null) {
       state = state.copyWith(connectedDevice: device);
+      _startCatchUpSync();
     }
+  }
+
+  void _startCatchUpSync() {
+    _catchUpSyncTimer?.cancel();
+    _catchUpSyncTimer = Timer.periodic(const Duration(minutes: 30), (_) async {
+      if (state.connectedDevice == null || state.connectionState != BleConnectionStateType.connected) {
+        return;
+      }
+      try {
+        await syncHistory();
+      } catch (_) {
+        // Background catch-up must not surface transient BLE failures over active UI state.
+      }
+    });
   }
 
   void _onError(Object error) {

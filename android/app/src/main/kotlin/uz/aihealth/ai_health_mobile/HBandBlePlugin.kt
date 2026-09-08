@@ -14,6 +14,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
+import androidx.core.content.ContextCompat.startForegroundService
 import com.inuker.bluetooth.library.Code
 import com.inuker.bluetooth.library.Constants
 import com.veepoo.protocol.VPOperateManager
@@ -428,6 +429,7 @@ class HBandBlePlugin(
         clearConnectTimeout()
         pendingConnectResult = null
         emitConnection("connected")
+        startCollectionService()
         pending.success(currentDeviceMap())
         Log.i(TAG, "Connect completed for $selectedAddress")
     }
@@ -464,9 +466,27 @@ class HBandBlePlugin(
             selectedName = null
             firmware = null
             batteryLevel = null
+            stopCollectionService()
             emitConnection("disconnected")
             result.success(null)
         }
+    }
+
+    private fun startCollectionService() {
+        val context = activity.applicationContext
+        val intent = Intent(context, HBandForegroundService::class.java).apply {
+            putExtra(HBandForegroundService.EXTRA_DEVICE_NAME, selectedName ?: "smart band")
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(context, intent)
+        } else {
+            context.startService(intent)
+        }
+    }
+
+    private fun stopCollectionService() {
+        val context = activity.applicationContext
+        context.stopService(Intent(context, HBandForegroundService::class.java))
     }
 
     private fun readBattery(result: MethodChannel.Result) {
