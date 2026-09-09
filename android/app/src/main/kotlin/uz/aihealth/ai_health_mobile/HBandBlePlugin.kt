@@ -474,8 +474,8 @@ class HBandBlePlugin(
 
     private fun startCollectionService() {
         val context = activity.applicationContext
-        val intent = Intent(context, HBandForegroundService::class.java).apply {
-            putExtra(HBandForegroundService.EXTRA_DEVICE_NAME, selectedName ?: "smart band")
+        val intent = Intent(context, B::class.java).apply {
+            putExtra(B.EXTRA_DEVICE_NAME, selectedName ?: "smart band")
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(context, intent)
@@ -486,7 +486,7 @@ class HBandBlePlugin(
 
     private fun stopCollectionService() {
         val context = activity.applicationContext
-        context.stopService(Intent(context, HBandForegroundService::class.java))
+        context.stopService(Intent(context, B::class.java))
     }
 
     private fun readBattery(result: MethodChannel.Result) {

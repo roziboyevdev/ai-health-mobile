@@ -10,7 +10,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.veepoo.protocol.VPOperateManager
 
-class HBandForegroundService : Service() {
+class B : Service() {
     override fun onCreate() {
         super.onCreate()
         VPOperateManager.getInstance().init(applicationContext)

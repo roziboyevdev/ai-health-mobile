@@ -13,6 +13,68 @@ class BleDevice {
   final String? macAddress;
   final int? rssi;
 
+  static const unnamedScanNames = {
+    '',
+    'unknown ble wearable',
+    'unknown band',
+    'unknown',
+    'n/a',
+  };
+
+  static const _allowKeywords = [
+    'veepoo',
+    'vpwatch',
+    'bracelet',
+    'smartband',
+    'smart band',
+    'y9',
+    'et450',
+  ];
+
+  static const _denyKeywords = [
+    'iphone',
+    'galaxy',
+    'pixel',
+    'airpods',
+    'airpod',
+    'buds',
+    'speaker',
+    'laptop',
+    'macbook',
+    'windows',
+    'chromecast',
+    'mi tv',
+    'samsung tv',
+    'android tv',
+    'smart tv',
+    'xiaomi',
+    'redmi',
+    'poco',
+    'huawei',
+    'honor',
+    'oppo',
+    'vivo',
+    'realme',
+    'oneplus',
+    'samsung',
+    'sony',
+    'jbl',
+    'bose',
+    'beats',
+    'logitech',
+    'xbox',
+    'nintendo',
+    'google',
+    'nest',
+    'echo',
+    'roku',
+    'kindle',
+    'printer',
+    'headphone',
+    'headset',
+    'earbud',
+  ];
+
   bool get isValdusFamily {
     final normalized = name.toLowerCase();
     return normalized.contains('vitro') ||
@@ -22,6 +84,61 @@ class BleDevice {
         normalized.contains('g-band') ||
         normalized.contains('g band') ||
         normalized.contains('gband');
+  }
+
+  bool get isUnnamedScanResult {
+    return unnamedScanNames.contains(name.trim().toLowerCase());
+  }
+
+  /// Nearby unnamed ads are only kept when the band is essentially in-hand.
+  /// A room-level threshold (e.g. -75) lets phones, TVs, and IoT flood the list.
+  static const nearbyUnnamedRssiMin = -55;
+
+  bool shouldShowInScan({required Set<String> knownIds}) {
+    if (_matchesKnownId(knownIds)) return true;
+    if (isValdusFamily) return true;
+
+    final normalized = name.toLowerCase().trim();
+    if (_isDeniedName(normalized)) return false;
+    if (_isAllowedWearableName(normalized)) return true;
+    if (isUnnamedScanResult && (rssi ?? -999) >= nearbyUnnamedRssiMin) return true;
+    return false;
+  }
+
+  bool _matchesKnownId(Set<String> knownIds) {
+    if (knownIds.isEmpty) return false;
+    final candidates = <String>{id, ?macAddress};
+    for (final candidate in candidates) {
+      final value = candidate.trim();
+      if (value.isEmpty) continue;
+      if (knownIds.contains(value)) return true;
+      final lower = value.toLowerCase();
+      for (final known in knownIds) {
+        if (known.toLowerCase() == lower) return true;
+      }
+    }
+    return false;
+  }
+
+  bool _isDeniedName(String normalized) {
+    if (normalized.isEmpty) return false;
+    for (final keyword in _denyKeywords) {
+      if (normalized.contains(keyword)) return true;
+    }
+    if (normalized == 'tv' ||
+        normalized.startsWith('tv ') ||
+        normalized.endsWith(' tv') ||
+        normalized.contains(' tv ')) {
+      return true;
+    }
+    return false;
+  }
+
+  bool _isAllowedWearableName(String normalized) {
+    for (final keyword in _allowKeywords) {
+      if (normalized.contains(keyword)) return true;
+    }
+    return false;
   }
 
   factory BleDevice.fromMap(Map<dynamic, dynamic> map) {

@@ -20,11 +20,15 @@ final bluetoothNotifierProvider =
 final bluetoothProvider = bluetoothNotifierProvider;
 
 final connectedDeviceProvider = Provider<Device?>((ref) {
-  return ref.watch(bluetoothNotifierProvider).connectedDevice;
+  return ref.watch(
+    bluetoothNotifierProvider.select((state) => state.connectedDevice),
+  );
 });
 
 final realTimeHealthProvider = Provider<RealTimeHealthData?>((ref) {
-  return ref.watch(bluetoothNotifierProvider).realTimeHealth;
+  return ref.watch(
+    bluetoothNotifierProvider.select((state) => state.realTimeHealth),
+  );
 });
 
 class BluetoothState {
@@ -36,7 +40,6 @@ class BluetoothState {
     this.isScanning = false,
     this.isBusy = false,
     this.errorMessage,
-    this.healthEpoch = 0,
   });
 
   final BleConnectionStateType connectionState;
@@ -46,7 +49,6 @@ class BluetoothState {
   final bool isScanning;
   final bool isBusy;
   final String? errorMessage;
-  final int healthEpoch;
 
   BluetoothState copyWith({
     BleConnectionStateType? connectionState,
@@ -56,19 +58,19 @@ class BluetoothState {
     bool? isScanning,
     bool? isBusy,
     String? errorMessage,
-    int? healthEpoch,
     bool clearConnectedDevice = false,
     bool clearError = false,
   }) {
     return BluetoothState(
       connectionState: connectionState ?? this.connectionState,
       devices: devices ?? this.devices,
-      connectedDevice: clearConnectedDevice ? null : connectedDevice ?? this.connectedDevice,
+      connectedDevice: clearConnectedDevice
+          ? null
+          : connectedDevice ?? this.connectedDevice,
       realTimeHealth: realTimeHealth ?? this.realTimeHealth,
       isScanning: isScanning ?? this.isScanning,
       isBusy: isBusy ?? this.isBusy,
       errorMessage: clearError ? null : errorMessage ?? this.errorMessage,
-      healthEpoch: healthEpoch ?? this.healthEpoch,
     );
   }
 }
@@ -79,13 +81,15 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
   StreamSubscription<RealTimeHealthData>? _healthSub;
   Timer? _scanTimeout;
   Timer? _catchUpSyncTimer;
+  Set<String> _knownDeviceIds = {};
 
   @override
   BluetoothState build() {
     final ble = ref.read(bleRepositoryProvider);
     _scanSub = ble.scanResults.listen(_onScanResult, onError: _onError);
-    _connectionSub =
-        ble.connectionState.listen((event) => state = state.copyWith(connectionState: event));
+    _connectionSub = ble.connectionState.listen(
+      (event) => state = state.copyWith(connectionState: event),
+    );
     _healthSub = ble.realTimeHealth.listen(_onHealthData, onError: _onError);
     ref.onDispose(() {
       _scanTimeout?.cancel();
@@ -95,11 +99,17 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
       _healthSub?.cancel();
     });
     _hydrateConnectedDevice();
+    ref.listen(settingsNotifierProvider, (previous, next) {
+      if (previous?.showAllBleDevices == true && !next.showAllBleDevices) {
+        _pruneScanResults();
+      }
+    });
     return const BluetoothState();
   }
 
   Future<void> startScan() async {
     _scanTimeout?.cancel();
+    await _refreshKnownDeviceIds();
     state = state.copyWith(
       isBusy: true,
       clearError: true,
@@ -112,7 +122,8 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
       if (!granted) {
         state = state.copyWith(
           isBusy: false,
-          errorMessage: 'Bluetooth permissions are required. Allow Nearby devices and try again.',
+          errorMessage:
+              'Bluetooth permissions are required. Allow Nearby devices and try again.',
         );
         return;
       }
@@ -124,7 +135,9 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
         );
         return;
       }
-      if (status.androidSdk > 0 && status.androidSdk < 31 && !status.locationOn) {
+      if (status.androidSdk > 0 &&
+          status.androidSdk < 31 &&
+          !status.locationOn) {
         state = state.copyWith(
           isBusy: false,
           errorMessage: 'Turn on Location services to scan for nearby bands.',
@@ -151,10 +164,9 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
     try {
       await ref.read(bleRepositoryProvider).stopScan();
       final settings = ref.read(settingsNotifierProvider);
-      final info = await ref.read(bleRepositoryProvider).connect(
-            device,
-            password: settings.devicePassword,
-          );
+      final info = await ref
+          .read(bleRepositoryProvider)
+          .connect(device, password: settings.devicePassword);
       final repository = ref.read(healthRepositoryProvider);
       await repository.markAllDisconnected();
       final model = Device()
@@ -168,7 +180,11 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
         ..isConnected = true
         ..lastSeenAt = DateTime.now();
       await repository.upsertDevice(model);
-      await repository.recordConnectionSession(deviceId: model.deviceId, startedAt: DateTime.now());
+      await repository.recordConnectionSession(
+        deviceId: model.deviceId,
+        startedAt: DateTime.now(),
+      );
+      await _refreshKnownDeviceIds();
       if (settings.syncOnConnect) {
         final sync = await ref.read(bleRepositoryProvider).syncHealthHistory();
         await _persistSync(sync, model);
@@ -181,7 +197,6 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
         connectedDevice: model,
         connectionState: BleConnectionStateType.connected,
         isBusy: false,
-        healthEpoch: state.healthEpoch + 1,
       );
       _startCatchUpSync();
     } catch (error) {
@@ -189,7 +204,7 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
     }
   }
 
-  Future<void> syncHistory() async {
+  Future<HealthSyncResult> syncHistory() async {
     final device = state.connectedDevice;
     if (device == null) {
       throw StateError('No band is connected.');
@@ -199,10 +214,9 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
     if (sync.batteryLevel != null) {
       device.batteryLevel = sync.batteryLevel;
       await ref.read(healthRepositoryProvider).upsertDevice(device);
-      state = state.copyWith(connectedDevice: device, healthEpoch: state.healthEpoch + 1);
-    } else {
-      state = state.copyWith(healthEpoch: state.healthEpoch + 1);
+      state = state.copyWith(connectedDevice: device);
     }
+    return sync;
   }
 
   Future<void> disconnect() async {
@@ -223,7 +237,9 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
   }
 
   void _onScanResult(BleDevice device) {
-    final existing = [...state.devices]..removeWhere((item) => item.id == device.id);
+    if (!_shouldKeepScanResult(device)) return;
+    final existing = [...state.devices]
+      ..removeWhere((item) => item.id == device.id);
     existing.add(device);
     existing.sort((a, b) {
       if (a.isValdusFamily != b.isValdusFamily) {
@@ -232,6 +248,17 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
       return (b.rssi ?? -999).compareTo(a.rssi ?? -999);
     });
     state = state.copyWith(devices: existing, isScanning: true);
+  }
+
+  bool _shouldKeepScanResult(BleDevice device) {
+    if (ref.read(settingsNotifierProvider).showAllBleDevices) return true;
+    return device.shouldShowInScan(knownIds: _knownDeviceIds);
+  }
+
+  void _pruneScanResults() {
+    final kept = state.devices.where(_shouldKeepScanResult).toList();
+    if (kept.length == state.devices.length) return;
+    state = state.copyWith(devices: kept);
   }
 
   Future<void> _onHealthData(RealTimeHealthData data) async {
@@ -286,11 +313,14 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
       await repository.saveSteps(
         StepRecord()
           ..deviceId = device.deviceId
-          ..date = DateTime(data.recordedAt.year, data.recordedAt.month, data.recordedAt.day)
+          ..date = DateTime(
+            data.recordedAt.year,
+            data.recordedAt.month,
+            data.recordedAt.day,
+          )
           ..steps = data.steps!,
       );
     }
-    state = state.copyWith(healthEpoch: state.healthEpoch + 1);
   }
 
   Future<void> _persistSync(HealthSyncResult sync, Device device) async {
@@ -317,7 +347,11 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
       await repository.saveSteps(
         StepRecord()
           ..deviceId = device.deviceId
-          ..date = DateTime(sample.date.year, sample.date.month, sample.date.day)
+          ..date = DateTime(
+            sample.date.year,
+            sample.date.month,
+            sample.date.day,
+          )
           ..steps = sample.steps
           ..distanceKm = sample.distanceKm
           ..calories = sample.calories,
@@ -337,15 +371,32 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
       );
     }
 
-    final todaySteps = sync.steps.where((item) => item.steps > 0).fold<int>(0, (sum, item) {
-      final sameDay = item.date.year == DateTime.now().year &&
+    final todaySteps = sync.steps.where((item) => item.steps > 0).fold<int>(0, (
+      sum,
+      item,
+    ) {
+      final sameDay =
+          item.date.year == DateTime.now().year &&
           item.date.month == DateTime.now().month &&
           item.date.day == DateTime.now().day;
-      return sameDay ? item.steps > sum ? item.steps : sum : sum;
+      return sameDay
+          ? item.steps > sum
+                ? item.steps
+                : sum
+          : sum;
     });
-    final latestHr = sync.heartRate.where((item) => item.bpm > 0).lastOrNull?.bpm;
-    final latestSpo2 = sync.spo2.where((item) => item.percentage > 0).lastOrNull?.percentage;
-    final latestSleep = sync.sleep.where((item) => item.totalMinutes > 0).lastOrNull?.totalMinutes;
+    final latestHr = sync.heartRate
+        .where((item) => item.bpm > 0)
+        .lastOrNull
+        ?.bpm;
+    final latestSpo2 = sync.spo2
+        .where((item) => item.percentage > 0)
+        .lastOrNull
+        ?.percentage;
+    final latestSleep = sync.sleep
+        .where((item) => item.totalMinutes > 0)
+        .lastOrNull
+        ?.totalMinutes;
     await repository.upsertDailySummary(
       DailySummary()
         ..deviceId = device.deviceId
@@ -357,6 +408,27 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
     );
   }
 
+  Future<void> _refreshKnownDeviceIds() async {
+    final ids = <String>{};
+    try {
+      final saved = await ref.read(healthRepositoryProvider).devices();
+      for (final device in saved) {
+        if (device.deviceId.isNotEmpty) ids.add(device.deviceId);
+        final mac = device.macAddress;
+        if (mac != null && mac.isNotEmpty) ids.add(mac);
+      }
+    } catch (_) {
+      // Scan filtering still works from VALDUS names and RSSI without history.
+    }
+    final connected = state.connectedDevice;
+    if (connected != null) {
+      if (connected.deviceId.isNotEmpty) ids.add(connected.deviceId);
+      final mac = connected.macAddress;
+      if (mac != null && mac.isNotEmpty) ids.add(mac);
+    }
+    _knownDeviceIds = ids;
+  }
+
   Future<void> _hydrateConnectedDevice() async {
     final repository = ref.read(healthRepositoryProvider);
     final device = await repository.connectedDevice();
@@ -364,12 +436,14 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
       state = state.copyWith(connectedDevice: device);
       _startCatchUpSync();
     }
+    await _refreshKnownDeviceIds();
   }
 
   void _startCatchUpSync() {
     _catchUpSyncTimer?.cancel();
     _catchUpSyncTimer = Timer.periodic(const Duration(minutes: 30), (_) async {
-      if (state.connectedDevice == null || state.connectionState != BleConnectionStateType.connected) {
+      if (state.connectedDevice == null ||
+          state.connectionState != BleConnectionStateType.connected) {
         return;
       }
       try {
@@ -381,6 +455,10 @@ class BluetoothNotifier extends Notifier<BluetoothState> {
   }
 
   void _onError(Object error) {
-    state = state.copyWith(isBusy: false, isScanning: false, errorMessage: error.toString());
+    state = state.copyWith(
+      isBusy: false,
+      isScanning: false,
+      errorMessage: error.toString(),
+    );
   }
 }

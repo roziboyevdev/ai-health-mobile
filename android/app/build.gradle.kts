@@ -29,6 +29,12 @@ android {
 
     buildTypes {
         release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             // Replace this with Play Console signing credentials in CI or local release builds.
             signingConfig = signingConfigs.getByName("debug")
         }

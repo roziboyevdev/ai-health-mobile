@@ -39,11 +39,11 @@
             android:name="com.inuker.bluetooth.library.BluetoothService"
             android:exported="false" />
         <service
-            android:name=".HBandForegroundService"
+            android:name=".B"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
         <activity
-            android:name=".MainActivity"
+            android:name=".A"
             android:exported="true"
             android:launchMode="singleTop"
             android:taskAffinity=""
